@@ -2,137 +2,127 @@
 
 namespace Dyrynda\Database\Support;
 
-use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\Relation;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Database\Eloquent\Relations\HasOneOrMany;
+use Illuminate\Database\Eloquent\Relations\MorphOneOrMany;
+use Illuminate\Database\Eloquent\SoftDeletes;
+use InvalidArgumentException;
 
-trait CascadeSoftDeletes
+trait CascadeSoftRestores
 {
     /**
      * Boot the trait.
      *
-     * Listen for the deleting event of a soft deleting model, and run
-     * the delete operation for any configured relationship methods.
-     *
-     * @throws \LogicException
-     */
-    protected static function bootCascadeSoftDeletes()
-    {
-        static::deleting(function ($model) {
-            $model->validateCascadingSoftDelete();
-
-            $model->runCascadingDeletes();
-        });
-    }
-
-
-    /**
-     * Validate that the calling model is correctly setup for cascading soft deletes.
-     *
-     * @throws \Dyrynda\Database\Support\CascadeSoftDeleteException
-     */
-    protected function validateCascadingSoftDelete()
-    {
-        if (! $this->implementsSoftDeletes()) {
-            throw CascadeSoftDeleteException::softDeleteNotImplemented(get_called_class());
-        }
-
-        if ($invalidCascadingRelationships = $this->hasInvalidCascadingRelationships()) {
-            throw CascadeSoftDeleteException::invalidRelationships($invalidCascadingRelationships);
-        }
-    }
-
-
-    /**
-     * Run the cascading soft delete for this model.
+     * Listen for the restoring event of a soft deleting model, and run
+     * the cascade restore functionality for the given model.
      *
      * @return void
      */
-    protected function runCascadingDeletes()
+    protected static function bootCascadeSoftRestores()
     {
-        foreach ($this->getActiveCascadingDeletes() as $relationship) {
-            $this->cascadeSoftDeletes($relationship);
-        }
+        static::restoring(function ($model) {
+            $model->validateCascadingSoftRestores();
+            $model->runCascadingSoftRestore();
+        });
     }
-
 
     /**
-     * Cascade delete the given relationship on the given mode.
+     * Validate that the model is using the SoftDeletes trait.
      *
-     * @param  string  $relationship
-     * @return return
+     * @return void
+     * @throws InvalidArgumentException
      */
-    protected function cascadeSoftDeletes($relationship)
+    public function validateCascadingSoftRestores()
     {
-        $delete = $this->forceDeleting ? 'forceDelete' : 'delete';
-
-        $cb = function($model) use ($delete) {
-            isset($model->pivot) ? $model->pivot->{$delete}() : $model->{$delete}();
-        };
-
-        $this->handleRecords($relationship, $cb);
-    }
-
-    private function handleRecords($relationship, $cb)
-    {
-        $fetchMethod = $this->fetchMethod ?? 'get';
-
-        if ($fetchMethod == 'chunk') {
-            $this->{$relationship}()->chunk($this->chunkSize ?? 500, $cb);
-        } else {
-            foreach($this->{$relationship}()->$fetchMethod() as $model) {
-                $cb($model);
-            }
+        if (! $this->implementsSoftDelete()) {
+            throw new InvalidArgumentException(sprintf(
+                '%s does not implement Illuminate\Database\Eloquent\SoftDeletes',
+                get_called_class()
+            ));
         }
     }
 
+    /**
+     * Run the cascading soft restore for this model.
+     *
+     * @return void
+     */
+    protected function runCascadingSoftRestore()
+    {
+        foreach ($this->getActiveCascadingSoftRestores() as $relationship) {
+            $this->cascadeSoftRestore($relationship);
+        }
+    }
+
+    /**
+     * Cascade restore the given relationship on the given mode.
+     *
+     * @param  string  $relationship
+     * @return void
+     */
+    protected function cascadeSoftRestore($relationship)
+    {
+        $restore = $this->getCascadingSoftRestoreAction($relationship);
+
+        $restore($this->{$relationship}());
+    }
+
+    /**
+     * Get the cascading soft restore action for the given relationship.
+     *
+     * @param  string  $relationship
+     * @return callable
+     */
+    protected function getCascadingSoftRestoreAction($relationship)
+    {
+        $relation = $this->{$relationship}();
+
+        if ($relation instanceof HasOneOrMany || $relation instanceof MorphOneOrMany) {
+            return function ($relation) {
+                $relation->onlyTrashed()->each(function ($model) {
+                    // Only restore if the model was soft deleted after this model
+                    if ($model->deleted_at && $model->deleted_at >= $this->deleted_at) {
+                        $model->restore();
+                    }
+                });
+            };
+        }
+
+        if ($relation instanceof BelongsToMany) {
+            return function ($relation) {
+                $relation->onlyTrashed()->each(function ($model) {
+                    // Only restore if the model was soft deleted after this model
+                    if ($model->deleted_at && $model->deleted_at >= $this->deleted_at) {
+                        $model->restore();
+                    }
+                });
+            };
+        }
+
+        throw new InvalidArgumentException(sprintf(
+            '%s does not support restoring %s relationships.',
+            __CLASS__,
+            get_class($relation)
+        ));
+    }
+
+    /**
+     * Get the relationships that are currently configured for cascading soft restores.
+     *
+     * @return array
+     */
+    protected function getActiveCascadingSoftRestores()
+    {
+        return $this->cascadeRestores ?? [];
+    }
 
     /**
      * Determine if the current model implements soft deletes.
      *
      * @return bool
      */
-    protected function implementsSoftDeletes()
+    protected function implementsSoftDelete()
     {
         return method_exists($this, 'runSoftDelete');
-    }
-
-
-    /**
-     * Determine if the current model has any invalid cascading relationships defined.
-     *
-     * A relationship is considered invalid when the method does not exist, or the relationship
-     * method does not return an instance of Illuminate\Database\Eloquent\Relations\Relation.
-     *
-     * @return array
-     */
-    protected function hasInvalidCascadingRelationships()
-    {
-        return array_filter($this->getCascadingDeletes(), function ($relationship) {
-            return ! method_exists($this, $relationship) || ! $this->{$relationship}() instanceof Relation;
-        });
-    }
-
-
-    /**
-     * Fetch the defined cascading soft deletes for this model.
-     *
-     * @return array
-     */
-    protected function getCascadingDeletes()
-    {
-        return isset($this->cascadeDeletes) ? (array) $this->cascadeDeletes : [];
-    }
-
-
-    /**
-     * For the cascading deletes defined on the model, return only those that are not null.
-     *
-     * @return array
-     */
-    protected function getActiveCascadingDeletes()
-    {
-        return array_filter($this->getCascadingDeletes(), function ($relationship) {
-            return $this->{$relationship}()->exists();
-        });
     }
 }
