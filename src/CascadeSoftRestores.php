@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasOneOrMany;
 use Illuminate\Database\Eloquent\Relations\MorphOneOrMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Support\Facades\Log;
 use InvalidArgumentException;
 
 trait CascadeSoftRestores
@@ -77,7 +78,7 @@ trait CascadeSoftRestores
     {
         $relation = $this->{$relationship}();
 
-        if ($relation instanceof HasOneOrMany || $relation instanceof MorphOneOrMany) {
+        if ($relation instanceof HasOneOrMany || $relation instanceof MorphOneOrMany || $relation instanceof BelongsToMany) {
             return function ($relation) {
                 $relation->onlyTrashed()->each(function ($model) {
                     // Only restore if the model was soft deleted after this model
