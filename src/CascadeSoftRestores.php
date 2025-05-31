@@ -5,7 +5,6 @@ namespace Dyrynda\Database\Support;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasOneOrMany;
 use Illuminate\Database\Eloquent\Relations\MorphOneOrMany;
-use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Facades\Log;
 use InvalidArgumentException;
 
@@ -100,11 +99,13 @@ trait CascadeSoftRestores
             };
         }
 
-        throw new InvalidArgumentException(sprintf(
+        $error = sprintf(
             '%s does not support restoring %s relationships.',
             __CLASS__,
             get_class($relation)
-        ));
+        );
+        Log::info($error);
+        throw new InvalidArgumentException($error);
     }
 
     /**
